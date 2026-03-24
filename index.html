@@ -368,6 +368,19 @@
       border-color: var(--warn);
       color: #7a5a00;
     }
+    .sched-job-pill.penciled {
+      background: #e65100;
+      border-color: #bf360c;
+      color: #fff;
+      border-left: 3px solid #bf360c;
+      opacity: 0.9;
+    }
+    .sched-job-pill.penciled .pill-ref {
+      color: #fff;
+    }
+    .sched-job-pill.penciled .pill-client {
+      color: rgba(255,255,255,0.85);
+    }
     .sched-job-pill.complete {
       background: #e3f2fd;
       border-color: #64b5f6;
@@ -2607,9 +2620,27 @@ function buildSchedule() {
   // Index every day for every job — not limited to one week
   const schedule = {};
   DB.jobs.forEach(job => {
-    if (!job.startDate || !job.endDate) return;
-    const start = new Date(job.startDate + 'T00:00:00');
-    const end = new Date(job.endDate + 'T00:00:00');
+    if (job.archived) return; // skip archived jobs
+
+    let start, end;
+
+    if (job.startDate && job.endDate) {
+      start = new Date(job.startDate + 'T00:00:00');
+      end = new Date(job.endDate + 'T00:00:00');
+    } else if (job.startDate && !job.endDate) {
+      // Has start but no end — show as single day
+      start = new Date(job.startDate + 'T00:00:00');
+      end = new Date(job.startDate + 'T00:00:00');
+    } else if (!job.startDate && job.deal?.expectedCloseDate) {
+      // No dates but has expected close — pencil in around that date (5 day block)
+      const ec = new Date(job.deal.expectedCloseDate + 'T00:00:00');
+      start = new Date(ec);
+      start.setDate(start.getDate() - 4); // start 4 days before expected close
+      end = ec;
+    } else {
+      return; // no dates at all, skip
+    }
+
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dayStr = d.toISOString().split('T')[0];
       if (!schedule[dayStr]) schedule[dayStr] = [];
@@ -2833,14 +2864,16 @@ function rEngGridRow(eng, days) {
       h += `<span class="sched-empty">—</span>`;
     } else {
       jobs.forEach(job => {
-        const status = job.board === 'Live' ? 'booked' : job.deal?.status === 'open' ? 'potential' : 'booked';
-        const pillCls = job.id === 'Q13393' ? 'potential' : status;
+        // Penciled = open/potential deal (not confirmed)
+        const isPenciled = job.deal?.status === 'open' || job.deal?.status !== 'won';
+        const pillCls = isPenciled ? 'penciled' : 'booked';
         const ref = job.id;
         const client = (job.linkedOrg || job.title || '').split(' - ')[0].substring(0, 14);
         const pmtInd = job.depositTerms === 'Payment Application' ? '<span class="pmt-app-indicator">PMT</span>' : '';
-        h += `<div class="sched-job-pill ${pillCls}" onclick="openJob('${job.id}')" title="${job.title}" ${job.depositTerms === 'Payment Application' ? 'style="border-left:3px solid #e91e63"' : ''}>
+        const noDateNote = (!job.startDate && job.deal?.expectedCloseDate) ? ' (approx)' : '';
+        h += `<div class="sched-job-pill ${pillCls}" onclick="openJob('${job.id}')" title="${job.title}${noDateNote}" ${job.depositTerms === 'Payment Application' && !isPenciled ? 'style="border-left:3px solid #e91e63"' : ''}>
           <span class="pill-ref">${ref}${pmtInd}</span>
-          <span class="pill-client">${client}</span>
+          <span class="pill-client">${client}${noDateNote}</span>
         </div>`;
       });
     }
