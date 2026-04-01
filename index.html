@@ -2654,6 +2654,11 @@ function getEngDayJobs(engId, dayStr) {
   const dayJobs = DB.schedule[dayStr] || [];
   return dayJobs.map(jid => getJob(jid)).filter(j => j && j.engineer === engId);
 }
+// Helper: get unassigned jobs for a specific day
+function getUnassignedDayJobs(dayStr) {
+  const dayJobs = DB.schedule[dayStr] || [];
+  return dayJobs.map(jid => getJob(jid)).filter(j => j && (!j.engineer || j.engineer === ''));
+}
 
 buildSchedule();
 
@@ -2848,6 +2853,34 @@ function rSchedule() {
   // Floors team header
   h += `<div class="sched-team-row">🏛 Floors / Ceilings / Surveys</div>`;
   floors.forEach(eng => { h += rEngGridRow(eng, days); });
+
+  // Unassigned / Penciled In row — shows jobs with no engineer assigned
+  const hasUnassigned = days.some(day => getUnassignedDayJobs(day.str).length > 0);
+  if (hasUnassigned) {
+    h += `<div class="wk-divider"></div>`;
+    h += `<div class="sched-team-row">🟠 Penciled In / Unassigned</div>`;
+    // Single row for all unassigned jobs
+    h += `<div class="sched-eng-name" style="color:#e65100;font-weight:700;"><span class="dot" style="background:#e65100"></span>TBC</div>`;
+    days.forEach(day => {
+      const jobs = getUnassignedDayJobs(day.str);
+      const cls = day.isToday ? 'today' : day.isWeekend ? 'weekend' : '';
+      h += `<div class="sched-cell ${cls}">`;
+      if (jobs.length === 0) {
+        h += `<span class="sched-empty">—</span>`;
+      } else {
+        jobs.forEach(job => {
+          const ref = job.id;
+          const client = (job.linkedOrg || job.title || '').split(' - ')[0].substring(0, 14);
+          const noDateNote = (!job.startDate && job.deal?.expectedCloseDate) ? ' (approx)' : '';
+          h += `<div class="sched-job-pill penciled" onclick="openJob('${job.id}')" title="${job.title}${noDateNote}">
+            <span class="pill-ref">${ref}</span>
+            <span class="pill-client">${client}${noDateNote}</span>
+          </div>`;
+        });
+      }
+      h += '</div>';
+    });
+  }
 
   h += '</div></div>';
   return h;
@@ -3348,58 +3381,278 @@ function rTeams() {
 }
 
 // DASHBOARD VIEW
+function fmtGBP(v) { return '£' + v.toLocaleString('en-GB', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
 function rDashboard() {
-  const booked = DB.jobs.filter(j => !j.archived && j.deal?.status === 'won').length;
-  const potential = DB.jobs.filter(j => !j.archived && j.deal?.status === 'open').length;
-  const totalValue = DB.jobs.filter(j => !j.archived).reduce((sum, j) => sum + (j.deal?.value || 0), 0);
-  const totalTasks = DB.jobs.filter(j => !j.archived).reduce((sum, j) => sum + (j.tasks?.length || 0), 0);
-  const doneTasks = DB.jobs.filter(j => !j.archived).reduce((sum, j) => sum + (j.tasks?.filter(t => t.done).length || 0), 0);
+  const live = DB.jobs.filter(j => !j.archived);
+  const archived = DB.jobs.filter(j => j.archived);
+  const won = live.filter(j => j.deal?.status === 'won');
+  const open = live.filter(j => j.deal?.status === 'open');
+  const wonVal = won.reduce((s, j) => s + (j.deal?.value || 0), 0);
+  const openVal = open.reduce((s, j) => s + (j.deal?.value || 0), 0);
+  const archivedVal = archived.reduce((s, j) => s + (j.deal?.value || 0), 0);
+  const pipelineTotal = wonVal + openVal;
+  const totalTasks = live.reduce((s, j) => s + (j.tasks?.length || 0), 0);
+  const doneTasks = live.reduce((s, j) => s + (j.tasks?.filter(t => t.done).length || 0), 0);
+  const taskPct = totalTasks > 0 ? Math.round(doneTasks / totalTasks * 100) : 0;
+  const todayStr = new Date().toISOString().split('T')[0];
 
-  let h = `<div class="sec">
-    <h2>📊 Dashboard</h2>
-    <div class="stats">
-      <div class="stat">
-        <div class="val">${booked}</div>
-        <div class="lbl">Booked Jobs</div>
+  // --- HERO STATS ---
+  let h = `<div style="background:linear-gradient(135deg,#1a237e 0%,#283593 50%,#3949ab 100%);padding:20px 16px;margin:-8px -8px 0;color:#fff;">
+    <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;opacity:0.7;margin-bottom:4px;">Hycom Installation Dashboard</div>
+    <div style="font-size:32px;font-weight:800;letter-spacing:-0.5px;">${fmtGBP(pipelineTotal)}</div>
+    <div style="font-size:12px;opacity:0.8;margin-top:2px;">Live Pipeline Value</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:16px;">
+      <div style="background:rgba(255,255,255,0.12);border-radius:10px;padding:10px 8px;text-align:center;">
+        <div style="font-size:24px;font-weight:800;">${won.length}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;">Booked</div>
       </div>
-      <div class="stat">
-        <div class="val">${potential}</div>
-        <div class="lbl">Potential</div>
+      <div style="background:rgba(255,255,255,0.12);border-radius:10px;padding:10px 8px;text-align:center;">
+        <div style="font-size:24px;font-weight:800;">${open.length}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;">Potential</div>
       </div>
-      <div class="stat">
-        <div class="val">£${totalValue}</div>
-        <div class="lbl">Total Value</div>
+      <div style="background:rgba(255,255,255,0.12);border-radius:10px;padding:10px 8px;text-align:center;">
+        <div style="font-size:24px;font-weight:800;">${taskPct}%</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;">Tasks Done</div>
       </div>
-      <div class="stat">
-        <div class="val">${totalTasks > 0 ? Math.round(doneTasks/totalTasks*100) : 0}%</div>
-        <div class="lbl">Tasks Complete</div>
+      <div style="background:rgba(255,255,255,0.12);border-radius:10px;padding:10px 8px;text-align:center;">
+        <div style="font-size:24px;font-weight:800;">${archived.length}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;">Completed</div>
       </div>
-    </div>
-  </div>
-
-  <div class="sec">
-    <h2>✅ Task Progress</h2>
-    <div style="font-size: 28px; font-weight: 700; color: var(--pri); margin-bottom: 8px;">${doneTasks}/${totalTasks}</div>
-    <div class="pbar"><div class="pfill" style="width: ${totalTasks > 0 ? (doneTasks/totalTasks*100) : 0}%"></div></div>
-  </div>
-
-  <div class="sec">
-    <h2>📦 Product Breakdown</h2>
-    <div style="font-size: 13px; color: var(--gray-dd);">
-      <div class="irow"><span class="ilbl">Altro</span><span class="ival">5 jobs</span></div>
-      <div class="irow"><span class="ilbl">Tarkett</span><span class="ival">2 jobs</span></div>
-      <div class="irow"><span class="ilbl">Other</span><span class="ival">1 job</span></div>
-    </div>
-  </div>
-
-  <div class="sec">
-    <h2>👷 Engineer Workload</h2>
-    <div style="font-size: 13px; color: var(--gray-dd);">
-      <div class="irow"><span class="ilbl">Dan</span><span class="ival">3 active</span></div>
-      <div class="irow"><span class="ilbl">Alexei</span><span class="ival">1 active</span></div>
-      <div class="irow"><span class="ilbl">Others</span><span class="ival">0 active</span></div>
     </div>
   </div>`;
+
+  // --- PIPELINE SPLIT ---
+  const wonPct = pipelineTotal > 0 ? (wonVal / pipelineTotal * 100) : 0;
+  h += `<div style="padding:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+      <div style="font-size:13px;font-weight:700;color:#1a237e;">Pipeline Split</div>
+      <div style="font-size:11px;color:var(--gray-dd);">${live.length} live jobs</div>
+    </div>
+    <div style="display:flex;height:28px;border-radius:8px;overflow:hidden;background:#e8eaf6;">
+      <div style="width:${wonPct}%;background:linear-gradient(90deg,#2e7d32,#43a047);display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;min-width:${wonPct > 5 ? '0' : '40'}px;">${wonPct > 10 ? fmtGBP(wonVal) : ''}</div>
+      <div style="width:${100 - wonPct}%;background:linear-gradient(90deg,#e65100,#ff8f00);display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;">${(100 - wonPct) > 10 ? fmtGBP(openVal) : ''}</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:6px;">
+      <div style="display:flex;align-items:center;gap:4px;font-size:11px;"><span style="width:8px;height:8px;border-radius:50%;background:#2e7d32;display:inline-block;"></span> Booked ${fmtGBP(wonVal)}</div>
+      <div style="display:flex;align-items:center;gap:4px;font-size:11px;"><span style="width:8px;height:8px;border-radius:50%;background:#e65100;display:inline-block;"></span> Potential ${fmtGBP(openVal)}</div>
+    </div>
+  </div>`;
+
+  // --- PAYMENT HEALTH ---
+  const payGroups = {};
+  live.forEach(j => { const s = j.paymentStatus || 'unknown'; payGroups[s] = (payGroups[s] || 0) + 1; });
+  const payLabels = {
+    'paid': { label: 'Fully Paid', color: '#2e7d32', icon: '✅' },
+    'deposit_paid': { label: 'Deposit Paid', color: '#1976d2', icon: '🔵' },
+    'deposit_unpaid': { label: 'Deposit Unpaid', color: '#c62828', icon: '🔴' },
+    'final_unpaid': { label: 'Final Unpaid', color: '#e65100', icon: '🟠' },
+    'variation_unpaid': { label: 'Variation Unpaid', color: '#7b1fa2', icon: '🟣' },
+    'unknown': { label: 'Not Set', color: '#9e9e9e', icon: '⚪' }
+  };
+  const paidVal = live.filter(j => j.paymentStatus === 'paid').reduce((s, j) => s + (j.deal?.value || 0), 0);
+  const unpaidVal = live.filter(j => j.paymentStatus && j.paymentStatus.includes('unpaid')).reduce((s, j) => s + (j.deal?.value || 0), 0);
+  const depositPaidVal = live.filter(j => j.paymentStatus === 'deposit_paid').reduce((s, j) => s + (j.deal?.value || 0), 0);
+
+  h += `<div style="padding:0 16px 16px;">
+    <div style="font-size:13px;font-weight:700;color:#1a237e;margin-bottom:10px;">💰 Payment Health</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;">
+      <div style="background:#e8f5e9;border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:16px;font-weight:800;color:#2e7d32;">${fmtGBP(paidVal)}</div>
+        <div style="font-size:9px;color:#2e7d32;text-transform:uppercase;font-weight:600;">Paid</div>
+      </div>
+      <div style="background:#e3f2fd;border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:16px;font-weight:800;color:#1976d2;">${fmtGBP(depositPaidVal)}</div>
+        <div style="font-size:9px;color:#1976d2;text-transform:uppercase;font-weight:600;">Deposit In</div>
+      </div>
+      <div style="background:${unpaidVal > 0 ? '#ffebee' : '#e8f5e9'};border-radius:10px;padding:10px;text-align:center;">
+        <div style="font-size:16px;font-weight:800;color:${unpaidVal > 0 ? '#c62828' : '#2e7d32'};">${fmtGBP(unpaidVal)}</div>
+        <div style="font-size:9px;color:${unpaidVal > 0 ? '#c62828' : '#2e7d32'};text-transform:uppercase;font-weight:600;">Outstanding</div>
+      </div>
+    </div>`;
+  Object.keys(payGroups).sort().forEach(k => {
+    const info = payLabels[k] || payLabels['unknown'];
+    const pct = live.length > 0 ? (payGroups[k] / live.length * 100) : 0;
+    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <span style="font-size:11px;min-width:100px;font-weight:500;color:${info.color};">${info.icon} ${info.label}</span>
+      <div style="flex:1;height:14px;background:#f5f5f5;border-radius:7px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${info.color};border-radius:7px;transition:width 300ms;"></div>
+      </div>
+      <span style="font-size:11px;font-weight:700;min-width:20px;text-align:right;">${payGroups[k]}</span>
+    </div>`;
+  });
+  h += '</div>';
+
+  // --- MATERIAL BRANDS (dynamic) ---
+  const brands = {};
+  live.forEach(j => {
+    const b = j.materialsWallBrand || 'Unspecified';
+    if (!brands[b]) brands[b] = { count: 0, value: 0 };
+    brands[b].count++;
+    brands[b].value += (j.deal?.value || 0);
+  });
+  const brandArr = Object.entries(brands).sort((a, b) => b[1].value - a[1].value);
+  const brandColors = { 'Altro': '#1565c0', 'Hycom': '#2e7d32', 'Trovex': '#e65100', 'Unspecified': '#9e9e9e' };
+  const maxBrandVal = brandArr.length > 0 ? brandArr[0][1].value : 1;
+
+  h += `<div style="padding:0 16px 16px;">
+    <div style="font-size:13px;font-weight:700;color:#1a237e;margin-bottom:10px;">📦 Material Brands</div>`;
+  brandArr.forEach(([name, data]) => {
+    const col = brandColors[name] || '#607d8b';
+    const pct = maxBrandVal > 0 ? (data.value / maxBrandVal * 100) : 0;
+    h += `<div style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+        <span style="font-size:12px;font-weight:600;color:${col};">${name}</span>
+        <span style="font-size:11px;color:var(--gray-dd);">${data.count} jobs · ${fmtGBP(data.value)}</span>
+      </div>
+      <div style="height:10px;background:#f0f0f0;border-radius:5px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${col};border-radius:5px;"></div>
+      </div>
+    </div>`;
+  });
+  h += '</div>';
+
+  // --- ENGINEER WORKLOAD (dynamic) ---
+  const engLoad = {};
+  live.forEach(j => {
+    if (!j.engineer) return;
+    if (!engLoad[j.engineer]) engLoad[j.engineer] = { jobs: 0, value: 0, onsite: false };
+    engLoad[j.engineer].jobs++;
+    engLoad[j.engineer].value += (j.deal?.value || 0);
+    if (j.startDate && j.endDate && j.startDate <= todayStr && j.endDate >= todayStr) {
+      engLoad[j.engineer].onsite = true;
+    }
+  });
+  const engArr = Object.entries(engLoad).sort((a, b) => b[1].value - a[1].value);
+  const maxEngVal = engArr.length > 0 ? engArr[0][1].value : 1;
+
+  h += `<div style="padding:0 16px 16px;">
+    <div style="font-size:13px;font-weight:700;color:#1a237e;margin-bottom:10px;">👷 Fitter Workload</div>`;
+  engArr.forEach(([id, data]) => {
+    const eng = DB.engineers.find(e => e.id === id);
+    const name = eng ? eng.name.split(' ')[0] : id;
+    const col = eng ? eng.color : '#607d8b';
+    const pct = maxEngVal > 0 ? (data.value / maxEngVal * 100) : 0;
+    const onsiteBadge = data.onsite ? '<span style="background:#2e7d32;color:#fff;font-size:8px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px;">ON SITE</span>' : '';
+    h += `<div style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+        <span style="font-size:12px;font-weight:600;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:4px;"></span>${name}${onsiteBadge}</span>
+        <span style="font-size:11px;color:var(--gray-dd);">${data.jobs} jobs · ${fmtGBP(data.value)}</span>
+      </div>
+      <div style="height:10px;background:#f0f0f0;border-radius:5px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${col};border-radius:5px;"></div>
+      </div>
+    </div>`;
+  });
+  if (open.filter(j => !j.engineer).length > 0) {
+    h += `<div style="margin-top:4px;padding:8px;background:#fff3e0;border-radius:8px;border-left:3px solid #e65100;">
+      <div style="font-size:11px;font-weight:600;color:#e65100;">⚠️ ${open.filter(j => !j.engineer).length} potential job${open.filter(j => !j.engineer).length > 1 ? 's' : ''} with no fitter assigned (${fmtGBP(open.filter(j => !j.engineer).reduce((s,j)=>s+(j.deal?.value||0),0))})</div>
+    </div>`;
+  }
+  h += '</div>';
+
+  // --- BOARD STATUS BREAKDOWN ---
+  const boardCounts = {};
+  const boardLabels = {
+    'fresh': { label: 'Fresh In', color: '#78909c' },
+    'stuck_customer': { label: 'Stuck Customer', color: '#c62828' },
+    'snags': { label: 'Snags', color: '#ad1457' },
+    'awaiting': { label: 'Awaiting Dates', color: '#6a1b9a' },
+    'prestart': { label: 'Pre-Start', color: '#e65100' },
+    'stuck_gavin': { label: 'Stuck Gavin', color: '#c62828' },
+    'stuck_harvey': { label: 'Stuck Harvey', color: '#c62828' },
+    'stuck_helenb': { label: 'Stuck Helen B', color: '#c62828' },
+    'outstanding': { label: 'Outstanding Labels', color: '#f9a825' },
+    'friday': { label: 'Friday', color: '#00838f' },
+    'onsite': { label: 'On Site', color: '#2e7d32' }
+  };
+  live.forEach(j => { const s = j.boardStatus || 'unknown'; boardCounts[s] = (boardCounts[s] || 0) + 1; });
+
+  h += `<div style="padding:0 16px 16px;">
+    <div style="font-size:13px;font-weight:700;color:#1a237e;margin-bottom:10px;">🗂 Project Board Overview</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;">`;
+  Object.entries(boardCounts).sort((a,b) => b[1] - a[1]).forEach(([status, count]) => {
+    const info = boardLabels[status] || { label: status, color: '#607d8b' };
+    const isStuck = status.startsWith('stuck');
+    h += `<div style="display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:8px;background:${isStuck ? '#ffebee' : '#f5f5f5'};border:1px solid ${isStuck ? '#ffcdd2' : '#e0e0e0'};">
+      <span style="font-size:18px;font-weight:800;color:${info.color};">${count}</span>
+      <span style="font-size:10px;font-weight:600;color:${info.color};line-height:1.2;">${info.label}</span>
+    </div>`;
+  });
+  h += '</div></div>';
+
+  // --- TASK COMPLETION BY JOB ---
+  const jobsWithTasks = live.filter(j => j.tasks && j.tasks.length > 0).sort((a, b) => {
+    const aPct = a.tasks.filter(t => t.done).length / a.tasks.length;
+    const bPct = b.tasks.filter(t => t.done).length / b.tasks.length;
+    return aPct - bPct; // least complete first
+  });
+
+  h += `<div style="padding:0 16px 16px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:#1a237e;">✅ Task Progress by Job</div>
+      <div style="font-size:11px;color:var(--gray-dd);">${doneTasks}/${totalTasks} total</div>
+    </div>`;
+  jobsWithTasks.forEach(j => {
+    const done = j.tasks.filter(t => t.done).length;
+    const total = j.tasks.length;
+    const pct = Math.round(done / total * 100);
+    const barCol = pct === 100 ? '#2e7d32' : pct >= 50 ? '#1976d2' : pct > 0 ? '#e65100' : '#c62828';
+    const org = (j.linkedOrg || '').substring(0, 22);
+    h += `<div style="margin-bottom:6px;cursor:pointer;" onclick="openJob('${j.id}')">
+      <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text);">${j.id} ${org}</span>
+        <span style="font-size:10px;font-weight:700;color:${barCol};">${done}/${total}</span>
+      </div>
+      <div style="height:6px;background:#f0f0f0;border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${barCol};border-radius:3px;"></div>
+      </div>
+    </div>`;
+  });
+  h += '</div>';
+
+  // --- UPCOMING JOBS (next 14 days) ---
+  const in14 = new Date(); in14.setDate(in14.getDate() + 14);
+  const in14Str = in14.toISOString().split('T')[0];
+  const upcoming = live.filter(j => j.startDate && j.startDate >= todayStr && j.startDate <= in14Str)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  if (upcoming.length > 0) {
+    h += `<div style="padding:0 16px 16px;">
+      <div style="font-size:13px;font-weight:700;color:#1a237e;margin-bottom:10px;">📅 Starting in Next 14 Days</div>`;
+    upcoming.forEach(j => {
+      const isPenciled = j.deal?.status !== 'won';
+      const bgCol = isPenciled ? '#fff3e0' : '#e8f5e9';
+      const borderCol = isPenciled ? '#e65100' : '#2e7d32';
+      const eng = j.engineer ? (DB.engineers.find(e => e.id === j.engineer)?.name?.split(' ')[0] || '?') : 'TBC';
+      h += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:4px;border-radius:8px;background:${bgCol};border-left:3px solid ${borderCol};cursor:pointer;" onclick="openJob('${j.id}')">
+        <div style="min-width:56px;font-size:10px;font-weight:700;color:${borderCol};">${fmtShort(j.startDate)}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${j.id} — ${(j.linkedOrg || '').substring(0, 25)}</div>
+          <div style="font-size:10px;color:var(--gray-dd);">${eng} · ${fmtGBP(j.deal?.value || 0)}</div>
+        </div>
+        ${isPenciled ? '<span style="font-size:8px;font-weight:700;background:#e65100;color:#fff;padding:2px 6px;border-radius:4px;">PENCILED</span>' : ''}
+      </div>`;
+    });
+    h += '</div>';
+  }
+
+  // --- COMPLETED JOBS (archived) ---
+  if (archived.length > 0) {
+    h += `<div style="padding:0 16px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+        <div style="font-size:13px;font-weight:700;color:#1a237e;">🏆 Completed Jobs</div>
+        <div style="font-size:11px;color:var(--gray-dd);">${fmtGBP(archivedVal)} delivered</div>
+      </div>`;
+    archived.forEach(j => {
+      h += `<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;margin-bottom:3px;border-radius:8px;background:#f5f5f5;cursor:pointer;" onclick="openJob('${j.id}')">
+        <span style="font-size:12px;font-weight:600;">${j.id}</span>
+        <span style="flex:1;font-size:11px;color:var(--gray-dd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${j.linkedOrg || ''}</span>
+        <span style="font-size:11px;font-weight:600;color:#2e7d32;">${fmtGBP(j.deal?.value || 0)}</span>
+      </div>`;
+    });
+    h += '</div>';
+  }
 
   return h;
 }
